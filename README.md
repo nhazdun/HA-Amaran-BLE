@@ -7,27 +7,29 @@ The integration speaks the fixture's native protocol: standard Bluetooth SIG
 Mesh for transport, plus amaran's vendor payload format. Both were recovered
 from the Sidus Link Android app (`com.sidus.link.amaran`).
 
-> **Status:** the mesh stack and payload encoder are covered by unit tests
-> (including a byte-for-byte comparison against the app's own bit-packing
-> algorithm). The end-to-end provisioning flow has not yet been run against
-> physical hardware — see [Testing status](#testing-status).
+> **Status:** verified end-to-end against an amaran Verge — discovery,
+> provisioning, AppKey binding and control all confirmed on real hardware.
+> See [Testing status](#testing-status).
 
 ---
 
 ## Features
 
-| | |
+| Entity | What it does |
 |---|---|
-| On / off | `SleepProtocol`, command 12 |
-| Brightness | 0–100 % in 0.1 % steps |
-| Colour temperature | 2700 K – 6500 K |
-| Effects | Lightning, TV, Fire, Strobe, Explosion, Faulty Bulb, Fireworks |
-| Transport | Bluetooth SIG Mesh over GATT proxy — local push, no polling |
-| Bluetooth proxies | Works through ESPHome Bluetooth proxies |
+| `light` | On/off, brightness (0.1 % steps), 2700–6500 K, and 7 effects |
+| `number` — Effect speed | The 4-bit frequency field, applied live to the running effect |
+| `select` — Dimming curve | Linear, exponential, logarithmic or S-curve |
+| `button` — Identify | Runs the fixture's own "I am here" effect |
+| `sensor` — battery, voltages, runtime | Only created for fixtures that actually report power |
+
+Transport is Bluetooth SIG Mesh over the GATT proxy, and works through
+ESPHome Bluetooth proxies.
 
 The Verge is a bi-colour fixture, so the light entity exposes
-`ColorMode.COLOR_TEMP`. HSI/RGB commands exist in the protocol module but the
-Verge firmware does not advertise support for them.
+`ColorMode.COLOR_TEMP` and reports no battery (it never answers a power
+query). HSI/RGB payload builders exist in `amaran/protocol.py` for other
+models but are not wired up.
 
 ## Requirements
 
@@ -77,7 +79,17 @@ What is verified, and how:
 | Network PDU encrypt/obfuscate | Round-trip tests; logic compared line-by-line with `NetworkLayerPDU` |
 | Segmentation, proxy SAR | Round-trip tests |
 | Vendor payloads | Byte-for-byte equality with a literal port of the app's `BinaryKit` packing |
-| Provisioning, GATT, live control | **Not yet exercised against hardware** |
+| Provisioning, binding, control | Confirmed on an amaran Verge (see below) |
+
+A full commissioning run against real hardware produced:
+
+```
+provisioned node at 0x0002 with 1 element(s)
+secure network beacon matches our network (iv_index=0)
+mesh RX src=0x0002 opcode=0x0002  Composition Data Status  CID 0x0211, vendor model 0x0211:0x0000
+mesh RX src=0x0002 opcode=0x8003  AppKey Status            0x00 success
+mesh RX src=0x0002 opcode=0x803e  Model App Status         0x00 bound
+```
 
 Run the suite with:
 
@@ -196,6 +208,11 @@ beyond the GATT bearer, so it can be reused for other SIG Mesh devices.
 - **One-way state.** amaran fixtures do not push status unprompted, so state is
   optimistic: it reflects what was last commanded. Status frames sent by the
   fixture are parsed when they do arrive.
+- **A fixture belongs to one mesh.** It keeps advertising the Mesh Provisioning
+  Service even after joining a network, so "discoverable" does not mean
+  "addable" — a fixture already paired elsewhere ignores the invite, and the
+  integration reports that explicitly. A factory reset (menu → *Bluetooth
+  reset*, or hold the *Bluetooth reset* button 3–5 s) is the way back.
 - **Provisioning is exclusive.** A fixture belongs to one mesh at a time; you
   cannot use Home Assistant and the Sidus Link app simultaneously.
 - **Bi-colour only.** HSI/RGB/XY payload builders are not wired to the light
