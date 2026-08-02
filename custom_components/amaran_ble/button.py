@@ -19,12 +19,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up button entities."""
     coordinator = entry.runtime_data
-    async_add_entities(
-        [
-            AmaranIdentifyButton(coordinator, entry),
-            AmaranRefreshPowerButton(coordinator, entry),
-        ]
-    )
+    entities: list[AmaranEntity] = [AmaranIdentifyButton(coordinator, entry)]
+    if coordinator.state.power:
+        entities.append(AmaranRefreshPowerButton(coordinator, entry))
+    async_add_entities(entities)
 
 
 class AmaranIdentifyButton(AmaranEntity, ButtonEntity):

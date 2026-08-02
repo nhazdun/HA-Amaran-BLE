@@ -30,6 +30,9 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 25.0
 COMMAND_RETRIES = 2
+#: How long to wait for a power report before concluding the model sends none.
+POWER_PROBE_TICKS = 10
+POWER_PROBE_INTERVAL = 0.3
 
 
 @dataclass(slots=True)
@@ -110,6 +113,23 @@ class AmaranCoordinator:
                 await self._ensure_configured()
         except (MeshSessionError, TimeoutError, OSError) as err:
             _LOGGER.debug("initial connect to %s failed: %s", self.ble_address, err)
+            return
+
+        await self._probe_power()
+
+    async def _probe_power(self) -> None:
+        """Ask once for a power report, to learn whether this model sends them.
+
+        Mains-only fixtures such as the Verge never answer. Platforms use the
+        result to decide whether battery sensors are worth creating at all,
+        rather than showing a row of permanently unknown values.
+        """
+        await self.async_refresh_power()
+        for _ in range(POWER_PROBE_TICKS):
+            if self.state.power:
+                return
+            await asyncio.sleep(POWER_PROBE_INTERVAL)
+        _LOGGER.debug("%s did not report power; no battery sensors", self.ble_address)
 
     async def _ensure_configured(self) -> None:
         """Add and bind the AppKey if the config flow could not finish that.

@@ -92,8 +92,12 @@ async def async_setup_entry(
     entry: AmaranConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up power sensors."""
+    """Set up power sensors, if this fixture reports power at all."""
     coordinator = entry.runtime_data
+    if not coordinator.state.power:
+        # Mains-only models never answer a power query; creating the sensors
+        # anyway would leave a row of permanently unknown values.
+        return
     async_add_entities(
         AmaranPowerSensor(coordinator, entry, description) for description in SENSORS
     )
