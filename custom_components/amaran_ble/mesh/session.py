@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from .crypto import k4
 from .pdu import (
+    PROXY_TYPE_BEACON,
     PROXY_TYPE_CONFIGURATION,
     PROXY_TYPE_NETWORK,
     UNSEGMENTED_ACCESS_MAX,
@@ -181,6 +182,10 @@ class MeshSession:
         self._pending: dict[tuple[int, int | None], asyncio.Future[bytes]] = {}
         self._reassembly: dict[tuple[int, int], SegmentedMessage] = {}
         self._send_lock = asyncio.Lock()
+        #: Set once a Secure Network Beacon confirms the node shares our NetKey.
+        self.beacon_seen = False
+        #: Network ID of a foreign mesh, if the node turned out to be in one.
+        self.foreign_network_id: bytes | None = None
         # Hold strong references so fire-and-forget acks are not garbage
         # collected before they run.
         self._background: set[asyncio.Task[None]] = set()
@@ -320,6 +325,9 @@ class MeshSession:
 
     def _on_pdu(self, msg_type: int, payload: bytes) -> None:
         """Decode an inbound proxy PDU."""
+        if msg_type == PROXY_TYPE_BEACON:
+            self._check_beacon(payload)
+            return
         if msg_type != PROXY_TYPE_NETWORK:
             return
 
@@ -333,6 +341,41 @@ class MeshSession:
 
         self._handle_access_transport(
             network.src, network.dst, network.seq, network.transport_pdu
+        )
+
+    def _check_beacon(self, payload: bytes) -> None:
+        """Compare a Secure Network Beacon's Network ID against our own.
+
+        A node happily beacons on whatever network it was provisioned into. If
+        that is not ours, every message we send is silently dropped at the
+        network layer, which is otherwise indistinguishable from an
+        unresponsive node - so say so explicitly.
+        """
+        if len(payload) < 22 or payload[0] != 0x01:
+            return
+
+        network_id = payload[2:10]
+        iv_index = int.from_bytes(payload[10:14], "big")
+        if network_id == self._keys.network_id:
+            self.beacon_seen = True
+            _LOGGER.debug(
+                "secure network beacon matches our network (iv_index=%d)", iv_index
+            )
+            if iv_index != self._credentials.iv_index:
+                _LOGGER.warning(
+                    "node reports IV index %d but we are using %d",
+                    iv_index,
+                    self._credentials.iv_index,
+                )
+            return
+
+        self.foreign_network_id = network_id
+        _LOGGER.error(
+            "fixture is in a different mesh: it beacons network ID %s but our "
+            "NetKey yields %s - the stored keys do not match the fixture, so it "
+            "must be factory-reset and re-added",
+            network_id.hex(),
+            self._keys.network_id.hex(),
         )
 
     def _handle_access_transport(
