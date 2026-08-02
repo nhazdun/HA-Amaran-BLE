@@ -46,8 +46,8 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 25.0
 #: The node reboots after provisioning; wait and retry before giving up.
-CONFIGURE_ATTEMPTS = 4
-CONFIGURE_BACKOFF = 3.0
+CONFIGURE_ATTEMPTS = 3
+CONFIGURE_BACKOFF = 5.0
 
 #: Addresses currently being provisioned. Home Assistant's per-unique-id flow
 #: guards do not cover this: provisioning is destructive and irreversible, so
@@ -242,11 +242,18 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
             vendor_models = await self._async_configure_with_retries(
                 net_key, app_key, iv_index, result.unicast_address, result.device_key
             )
-        except (MeshSessionError, TimeoutError, OSError) as err:
+        except Exception as err:  # noqa: BLE001 - see below
+            # Deliberately broad. Once provisioning has succeeded the fixture
+            # is committed to this mesh, so *any* later failure - a Bleak
+            # connection error, a stack shutdown, a bug in our own config
+            # client - must still produce an entry holding the keys. Letting an
+            # exception escape here would strand the fixture and force a
+            # factory reset.
             _LOGGER.warning(
-                "provisioned 0x%04x, but configuration did not complete (%s); "
+                "provisioned 0x%04x, but configuration did not complete (%s: %s); "
                 "the integration will retry on setup",
                 result.unicast_address,
+                type(err).__name__,
                 err,
             )
         else:

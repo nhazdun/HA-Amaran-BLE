@@ -50,8 +50,14 @@ PROXY_OP_ADD_ADDRESSES = 0x01
 PROXY_FILTER_WHITELIST = 0x00
 
 DEFAULT_TTL = 7
-STATUS_TIMEOUT = 12.0
+STATUS_TIMEOUT = 15.0
+#: Mesh has no link-layer ack, so a request is repeated before it is called lost.
+REQUEST_ATTEMPTS = 3
 SEQ_MAX = 0xFFFFFF
+#: Never transmit sequence number 0. Some stacks seed their replay-protection
+#: list with 0 and require a strictly greater value, silently dropping the very
+#: first message of a freshly provisioned session.
+SEQ_MIN = 1
 
 MessageHandler = Callable[[int, int, bytes], None]
 
@@ -175,7 +181,7 @@ class MeshSession:
         self._credentials = credentials
         self._keys = credentials.keys()
         self._aid = credentials.aid
-        self._sequence = sequence
+        self._sequence = max(sequence, SEQ_MIN)
         self._on_message = on_message
         self._bearer = MeshGattBearer.proxy(client, self._on_pdu)
         self._loop = asyncio.get_running_loop()
@@ -306,20 +312,39 @@ class MeshSession:
         *,
         dev_key: bytes | None = None,
         timeout: float = STATUS_TIMEOUT,
+        attempts: int = REQUEST_ATTEMPTS,
     ) -> bytes:
-        """Send a message and wait for its status reply."""
+        """Send a message and wait for its status reply.
+
+        Retries the send: mesh has no link-layer acknowledgement, and a
+        freshly provisioned node routinely misses the first message or two
+        while it settles.
+        """
         future: asyncio.Future[bytes] = self._loop.create_future()
         key = (response_opcode, dst)
         self._pending[key] = future
         try:
-            await self.send_access(dst, opcode, params, dev_key=dev_key)
-            return await asyncio.wait_for(future, timeout)
-        except TimeoutError as err:
+            for attempt in range(attempts):
+                await self.send_access(dst, opcode, params, dev_key=dev_key)
+                try:
+                    return await asyncio.wait_for(
+                        asyncio.shield(future), timeout / attempts
+                    )
+                except TimeoutError:
+                    _LOGGER.debug(
+                        "no reply to 0x%04x from 0x%04x (attempt %d/%d)",
+                        opcode,
+                        dst,
+                        attempt + 1,
+                        attempts,
+                    )
             raise MeshSessionError(
-                f"no reply to opcode 0x{opcode:04x} from 0x{dst:04x}"
-            ) from err
+                f"no reply to opcode 0x{opcode:04x} from 0x{dst:04x} "
+                f"after {attempts} attempts"
+            )
         finally:
             self._pending.pop(key, None)
+            future.cancel()
 
     # -- inbound -----------------------------------------------------------
 
