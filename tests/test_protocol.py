@@ -248,3 +248,88 @@ def test_intensity_bounds() -> None:
     assert p.checksum_valid(p.cct(1000, 650))
     with pytest.raises(ValueError):
         p.cct(1024, 560)  # 10-bit field overflow
+
+
+def test_dimming_curve_matches_java_reference() -> None:
+    for name, curve in p.DIMMING_CURVE_NAMES.items():
+        payload = p.dimming_curve(int(curve))
+        assert payload == java_pack(
+            [(0, 8), (0, 20), (0, 20), (0, 16), (int(curve), 8), (8, 7), (1, 1)]
+        ), name
+        assert p.command_of(payload) == p.Command.DIMMING_CURVE
+        assert p.unpack_field(payload, 64, 8) == int(curve)
+
+
+def test_identify_matches_java_reference() -> None:
+    assert p.identify(True) == java_pack(
+        [(0, 8), (0, 1), (0, 20), (0, 20), (0, 13), (1, 2), (16, 8), (7, 7), (1, 1)]
+    )
+    assert p.command_of(p.identify(True)) == p.Command.SYSTEM_EFFECT
+    assert p.effect_of(p.identify(True)) == p.Effect.I_AM_HERE
+    assert p.unpack_field(p.identify(False), 62, 2) == 0
+
+
+def test_effect_speed_lands_in_the_frq_field() -> None:
+    # frq sits at a different offset per effect; check via the java reference.
+    assert p.build_effect("TV", 500, 560, frq=12) == java_pack(
+        [
+            (0, 8),
+            (1, 1),
+            (0, 20),
+            (0, 11),
+            (0, 10),
+            (12, 4),
+            (500, 10),
+            (3, 8),
+            (7, 7),
+            (1, 1),
+        ]
+    )
+    assert p.build_effect("Strobe", 500, 560, frq=9) == java_pack(
+        [
+            (0, 8),
+            (1, 1),
+            (0, 15),
+            (0, 1),
+            (0, 1),
+            (0, 1),
+            (0, 2),
+            (10, 7),
+            (560, 10),
+            (500, 10),
+            (9, 4),
+            (0, 4),
+            (6, 8),
+            (7, 7),
+            (1, 1),
+        ]
+    )
+
+
+def test_effect_speed_is_clamped_to_the_four_bit_field() -> None:
+    for name in p.VERGE_EFFECTS:
+        assert p.checksum_valid(p.build_effect(name, 500, 560, frq=99))
+        assert p.checksum_valid(p.build_effect(name, 500, 560, frq=-5))
+
+
+def test_parse_power_round_trip() -> None:
+    payload = p.pack(
+        [
+            (0, 8),
+            (0, 12),
+            (1, 1),  # powered
+            (0, 3),
+            (90, 9),  # battery_time (protocol < 42)
+            (77, 7),  # battery_level
+            (11100, 16),  # battery_voltage, mV
+            (19500, 16),  # extern_voltage, mV
+            (10, 7),
+            (0, 1),
+        ]
+    )
+    power = p.parse_power(payload)
+    assert power["powered"] == 1
+    assert power["battery_level"] == 77
+    assert power["battery_time"] == 90
+    assert power["battery_voltage"] == 11100
+    assert power["extern_voltage"] == 19500

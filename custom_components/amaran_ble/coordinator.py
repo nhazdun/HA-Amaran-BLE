@@ -46,8 +46,12 @@ class LightState:
     kelvin: int = 5600
     effect: str | None = None
     available: bool = False
-    #: Extra attributes reported by the fixture, if it ever answers.
-    reported: dict[str, int] = field(default_factory=dict)
+    #: 4-bit frequency field applied to whichever system effect is running.
+    effect_speed: int = protocol.EFFECT_SPEED_DEFAULT
+    #: Dimming response curve currently selected on the fixture.
+    dimming_curve: int = int(protocol.DimmingCurve.LINEAR)
+    #: Latest power/battery report, empty until the fixture answers one.
+    power: dict[str, int] = field(default_factory=dict)
 
 
 class AmaranCoordinator:
@@ -226,13 +230,26 @@ class AmaranCoordinator:
             self.state.intensity = parsed["intensity"]
             self.state.kelvin = parsed["cct"] * 10
             self.state.is_on = bool(parsed["sleep_mode"]) and parsed["intensity"] > 0
-            self.state.reported = parsed
         elif command == protocol.Command.SLEEP:
             self.state.is_on = bool(protocol.parse_sleep(params))
+        elif command == protocol.Command.GET_POWER:
+            self.state.power = protocol.parse_power(params)
+            _LOGGER.debug("power report: %s", self.state.power)
         else:
             return
 
         self._notify()
+
+    async def async_refresh_power(self) -> None:
+        """Ask the fixture for a battery/power report.
+
+        Not every fixture answers - mains-only models simply stay silent - so
+        this is fire-and-forget and any reply lands via ``_on_mesh_message``.
+        """
+        try:
+            await self.async_send(protocol.get_power())
+        except MeshSessionError as err:
+            _LOGGER.debug("power query failed: %s", err)
 
     # -- commands ----------------------------------------------------------
 

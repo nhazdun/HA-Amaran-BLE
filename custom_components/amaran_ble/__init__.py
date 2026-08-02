@@ -25,7 +25,13 @@ from .mesh.session import MeshCredentials
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
+    Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+]
 
 type AmaranConfigEntry = ConfigEntry[AmaranCoordinator]
 

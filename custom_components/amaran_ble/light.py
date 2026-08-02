@@ -13,22 +13,14 @@ from homeassistant.components.light import (
     LightEntity,
     LightEntityFeature,
 )
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import AmaranConfigEntry
 from .amaran import protocol
-from .const import (
-    CONF_DEVICE_NAME,
-    DEFAULT_KELVIN,
-    DOMAIN,
-    INTENSITY_MAX,
-)
+from .const import DEFAULT_KELVIN, INTENSITY_MAX
 from .coordinator import AmaranCoordinator
-from .mesh.session import MeshSessionError
+from .entity import AmaranEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,10 +36,9 @@ async def async_setup_entry(
     async_add_entities([AmaranLight(entry.runtime_data, entry)])
 
 
-class AmaranLight(LightEntity):
+class AmaranLight(AmaranEntity, LightEntity):
     """A bi-colour amaran fixture controlled over Bluetooth mesh."""
 
-    _attr_has_entity_name = True
     _attr_name = None
     _attr_color_mode = ColorMode.COLOR_TEMP
     _attr_supported_color_modes: ClassVar[set[ColorMode]] = {ColorMode.COLOR_TEMP}
@@ -57,40 +48,13 @@ class AmaranLight(LightEntity):
         self, coordinator: AmaranCoordinator, entry: AmaranConfigEntry
     ) -> None:
         """Bind the entity to its coordinator."""
-        self._coordinator = coordinator
+        super().__init__(coordinator, entry)
         self._attr_unique_id = entry.unique_id or entry.entry_id
         self._attr_min_color_temp_kelvin = coordinator.min_kelvin
         self._attr_max_color_temp_kelvin = coordinator.max_kelvin
         self._attr_effect_list = [EFFECT_NONE, *protocol.VERGE_EFFECTS]
 
-        product = coordinator.product
-        self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_BLUETOOTH, coordinator.ble_address)},
-            identifiers={(DOMAIN, entry.entry_id)},
-            manufacturer=product.vendor if product else "amaran",
-            model=product.name if product else "amaran fixture",
-            name=entry.title,
-            serial_number=entry.data.get(CONF_DEVICE_NAME, "").split("-")[-1] or None,
-        )
-
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to coordinator updates."""
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass, self._coordinator.signal_update, self._handle_update
-            )
-        )
-
-    @callback
-    def _handle_update(self) -> None:
-        self.async_write_ha_state()
-
     # -- state -------------------------------------------------------------
-
-    @property
-    def available(self) -> bool:
-        """Whether the fixture is reachable."""
-        return self._coordinator.state.available
 
     @property
     def is_on(self) -> bool:
@@ -141,9 +105,13 @@ class AmaranLight(LightEntity):
         if effect is None:
             payloads.append(protocol.cct(intensity, kelvin // 10))
         else:
-            payloads.append(protocol.build_effect(effect, intensity, kelvin // 10))
+            payloads.append(
+                protocol.build_effect(
+                    effect, intensity, kelvin // 10, frq=state.effect_speed
+                )
+            )
 
-        await self._send(payloads)
+        await self._send(*payloads)
 
         state.is_on = True
         state.intensity = intensity
@@ -153,16 +121,6 @@ class AmaranLight(LightEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the fixture off."""
-        await self._send([protocol.sleep(False)])
+        await self._send(protocol.sleep(False))
         self._coordinator.state.is_on = False
         self.async_write_ha_state()
-
-    async def _send(self, payloads: list[bytes]) -> None:
-        """Send payloads, translating mesh failures into HA errors."""
-        try:
-            for payload in payloads:
-                await self._coordinator.async_send(payload)
-        except MeshSessionError as err:
-            raise HomeAssistantError(
-                f"Failed to control {self.entity_id or 'amaran light'}: {err}"
-            ) from err

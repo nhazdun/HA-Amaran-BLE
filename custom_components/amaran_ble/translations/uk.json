@@ -23,5 +23,25 @@
       "not_amaran": "Цей Bluetooth mesh-пристрій не є відомим світильником amaran.",
       "provisioning_failed": "Провіжининг не вдався. Зробіть скидання до заводських налаштувань і спробуйте ще раз."
     }
+  },
+  "entity": {
+    "number": {
+      "effect_speed": {
+        "name": "Швидкість ефекту"
+      }
+    },
+    "select": {
+      "dimming_curve": {
+        "name": "Крива яскравості"
+      }
+    },
+    "button": {
+      "identify": {
+        "name": "Знайти світильник"
+      },
+      "refresh_power": {
+        "name": "Оновити живлення"
+      }
+    }
   }
 }

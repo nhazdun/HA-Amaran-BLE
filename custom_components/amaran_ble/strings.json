@@ -23,5 +23,25 @@
       "not_amaran": "This Bluetooth mesh device is not a recognised amaran fixture.",
       "provisioning_failed": "Provisioning failed. Factory-reset the fixture and try again."
     }
+  },
+  "entity": {
+    "number": {
+      "effect_speed": {
+        "name": "Effect speed"
+      }
+    },
+    "select": {
+      "dimming_curve": {
+        "name": "Dimming curve"
+      }
+    },
+    "button": {
+      "identify": {
+        "name": "Identify"
+      },
+      "refresh_power": {
+        "name": "Refresh power"
+      }
+    }
   }
 }

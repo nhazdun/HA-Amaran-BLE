@@ -37,6 +37,7 @@ class Command(IntEnum):
     RGBW = 4
     XY = 5
     SYSTEM_EFFECT = 7
+    DIMMING_CURVE = 8
     GET_POWER = 10
     SLEEP = 12
     BRIGHTNESS = 15
@@ -53,6 +54,7 @@ class Effect(IntEnum):
     EXPLOSION = 7
     FAULTY_BULB = 8
     FIREWORKS = 14
+    I_AM_HERE = 16
 
 
 #: Effects the Verge / Verge Max firmware advertises in ``fixtureConfig.json``.
@@ -227,6 +229,61 @@ def brightness(intensity: int, ratio: int = 0) -> bytes:
             (intensity, 10),
             (Command.BRIGHTNESS, 7),
             (OPTION_READ, 1),
+        ]
+    )
+
+
+class DimmingCurve(IntEnum):
+    """Dimming response curves (``ProtocolConstant.DIMMING_CURVE_*``)."""
+
+    LINEAR = 0
+    EXPONENTIAL = 1
+    LOGARITHMIC = 2
+    S_CURVE = 3
+
+
+#: Human-readable names for the dimming curves, in protocol order.
+DIMMING_CURVE_NAMES: dict[str, DimmingCurve] = {
+    "Linear": DimmingCurve.LINEAR,
+    "Exponential": DimmingCurve.EXPONENTIAL,
+    "Logarithmic": DimmingCurve.LOGARITHMIC,
+    "S-curve": DimmingCurve.S_CURVE,
+}
+
+#: Effect frequency/speed is a 4-bit field on every system effect.
+EFFECT_SPEED_MIN = 0
+EFFECT_SPEED_MAX = 15
+EFFECT_SPEED_DEFAULT = 5
+
+
+def dimming_curve(curve: int) -> bytes:
+    """Set the dimming response curve (``CurveProtocol``, command 8)."""
+    return pack(
+        [
+            (0, 8),
+            (0, 20),
+            (0, 20),
+            (0, 16),
+            (curve, 8),
+            (Command.DIMMING_CURVE, 7),
+            (OPTION_WRITE, 1),
+        ]
+    )
+
+
+def identify(on: bool) -> bytes:
+    """Flash the fixture to locate it (``HereProtocol``, effect 16)."""
+    return pack(
+        [
+            (0, 8),
+            (0, 1),
+            (0, 20),
+            (0, 20),
+            (0, 13),
+            (1 if on else 0, 2),
+            (Effect.I_AM_HERE, 8),
+            (Command.SYSTEM_EFFECT, 7),
+            (OPTION_WRITE, 1),
         ]
     )
 
@@ -447,25 +504,31 @@ def effect_off(intensity: int, cct_deci_kelvin: int) -> bytes:
     return cct(intensity, cct_deci_kelvin)
 
 
-def build_effect(name: str, intensity: int, cct_deci_kelvin: int) -> bytes:
+def build_effect(
+    name: str,
+    intensity: int,
+    cct_deci_kelvin: int,
+    frq: int = EFFECT_SPEED_DEFAULT,
+) -> bytes:
     """Build the payload for a named Verge effect at the given light settings."""
     effect = VERGE_EFFECTS.get(name)
     if effect is None:
         raise ValueError(f"unsupported effect: {name}")
+    frq = max(EFFECT_SPEED_MIN, min(EFFECT_SPEED_MAX, frq))
 
     if effect is Effect.LIGHTNING:
-        return effect_lightning(intensity, cct_deci_kelvin)
+        return effect_lightning(intensity, cct_deci_kelvin, frq=frq)
     if effect is Effect.TV:
-        return effect_tv(intensity)
+        return effect_tv(intensity, frq=frq)
     if effect is Effect.FIRE:
-        return effect_fire(intensity)
+        return effect_fire(intensity, frq=frq)
     if effect is Effect.STROBE:
-        return effect_strobe(intensity, cct_deci_kelvin)
+        return effect_strobe(intensity, cct_deci_kelvin, frq=frq)
     if effect is Effect.EXPLOSION:
-        return effect_explosion(intensity, cct_deci_kelvin)
+        return effect_explosion(intensity, cct_deci_kelvin, frq=frq)
     if effect is Effect.FAULTY_BULB:
-        return effect_faulty_bulb(intensity, cct_deci_kelvin)
-    return effect_fireworks(intensity)
+        return effect_faulty_bulb(intensity, cct_deci_kelvin, frq=frq)
+    return effect_fireworks(intensity, frq=frq)
 
 
 # --------------------------------------------------------------------------
@@ -495,3 +558,24 @@ def parse_cct(payload: bytes) -> dict[str, int]:
 def parse_sleep(payload: bytes) -> int:
     """Decode a sleep-mode status payload. 1 = on, 0 = off."""
     return unpack_field(payload, 64, 8)
+
+
+def parse_power(payload: bytes, protocol_version: int = -1) -> dict[str, int]:
+    """Decode a power status payload (mirrors ``GetPowerProtocol.parseData``).
+
+    Voltages are millivolts, ``battery_level`` a percentage, ``battery_time``
+    the estimated remaining runtime in minutes, and ``powered`` whether the
+    fixture is running from an external supply.
+    """
+    if protocol_version < 42:
+        battery_time = unpack_field(payload, 24, 9)
+    else:
+        battery_time = unpack_field(payload, 21, 12)
+
+    return {
+        "extern_voltage": unpack_field(payload, 56, 16),
+        "battery_voltage": unpack_field(payload, 40, 16),
+        "battery_level": unpack_field(payload, 33, 7),
+        "battery_time": battery_time,
+        "powered": unpack_field(payload, 20, 1),
+    }
