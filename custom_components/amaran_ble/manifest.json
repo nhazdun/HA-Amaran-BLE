@@ -1,0 +1,19 @@
+{
+  "domain": "amaran_ble",
+  "name": "amaran BLE",
+  "bluetooth": [
+    {
+      "service_uuid": "00001827-0000-1000-8000-00805f9b34fb"
+    }
+  ],
+  "codeowners": ["@nhazdun"],
+  "config_flow": true,
+  "dependencies": ["bluetooth_adapters"],
+  "documentation": "https://github.com/nhazdun/HA-Amaran-BLE",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/nhazdun/HA-Amaran-BLE/issues",
+  "loggers": ["custom_components.amaran_ble"],
+  "requirements": [],
+  "version": "0.1.0"
+}

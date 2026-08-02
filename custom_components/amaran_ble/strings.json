@@ -1,0 +1,26 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Add an amaran fixture",
+        "description": "Select an unprovisioned amaran fixture to add. The fixture must be powered on and not already paired in the Sidus Link app.",
+        "data": {
+          "address": "Fixture"
+        }
+      },
+      "confirm": {
+        "title": "Provision {name}",
+        "description": "Home Assistant will provision {name} ({address}) into its own Bluetooth mesh network.\n\nThis removes the fixture from the Sidus Link app. To use the app again, factory-reset the fixture and re-add it there.\n\nKeep the fixture powered on and close to a Bluetooth adapter or proxy while provisioning."
+      }
+    },
+    "abort": {
+      "already_configured": "This fixture is already set up.",
+      "already_in_progress": "Setup for this fixture is already in progress.",
+      "cannot_connect": "Could not connect to the fixture. Move it closer to a Bluetooth adapter and try again.",
+      "no_devices_found": "No unprovisioned amaran fixtures found. Factory-reset the fixture so it advertises as unprovisioned, then retry.",
+      "not_amaran": "This Bluetooth mesh device is not a recognised amaran fixture.",
+      "provisioning_failed": "Provisioning failed. Factory-reset the fixture and try again."
+    }
+  }
+}
