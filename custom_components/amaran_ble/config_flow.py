@@ -33,7 +33,12 @@ from .const import (
     PROVISIONER_ADDRESS,
 )
 from .mesh.crypto import random_bytes
-from .mesh.provisioning import Provisioner, ProvisioningData, ProvisioningError
+from .mesh.provisioning import (
+    NotUnprovisionedError,
+    Provisioner,
+    ProvisioningData,
+    ProvisioningError,
+)
 from .mesh.session import MeshCredentials, MeshSession, MeshSessionError
 
 _LOGGER = logging.getLogger(__name__)
@@ -161,6 +166,9 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
 
         try:
             return await self._async_provision()
+        except NotUnprovisionedError as err:
+            _LOGGER.error("fixture is not unprovisioned: %s", err)
+            return self.async_abort(reason="already_provisioned")
         except ProvisioningError as err:
             _LOGGER.error("provisioning failed: %s", err)
             return self.async_abort(reason="provisioning_failed")

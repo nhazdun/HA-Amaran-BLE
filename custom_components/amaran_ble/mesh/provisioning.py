@@ -67,6 +67,17 @@ class ProvisioningError(Exception):
     """Raised when provisioning fails or times out."""
 
 
+class NotUnprovisionedError(ProvisioningError):
+    """The device never answered the invite.
+
+    amaran fixtures keep advertising the Mesh Provisioning Service even after
+    they have joined a network, so "discoverable" does not imply
+    "provisionable" - a fixture already bound to another mesh (the Sidus Link
+    app, or an earlier failed attempt) simply ignores the invite. A factory
+    reset is the only way back.
+    """
+
+
 @dataclass(slots=True)
 class ProvisioningResult:
     """Outcome of a successful provisioning session."""
@@ -182,7 +193,13 @@ class Provisioner:
         await self._send(PDU_INVITE, self._invite_params)
 
         # 2. Capabilities.
-        self._capabilities = await self._expect(PDU_CAPABILITIES)
+        try:
+            self._capabilities = await self._expect(PDU_CAPABILITIES)
+        except ProvisioningError as err:
+            raise NotUnprovisionedError(
+                "the fixture ignored the provisioning invite, which means it is "
+                "still joined to another mesh - factory-reset it and retry"
+            ) from err
         if len(self._capabilities) < 11:
             raise ProvisioningError("malformed capabilities PDU")
         element_count = self._capabilities[0] or 1

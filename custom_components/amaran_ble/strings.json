@@ -17,6 +17,7 @@
     "abort": {
       "already_configured": "This fixture is already set up.",
       "already_in_progress": "Setup for this fixture is already in progress.",
+      "already_provisioned": "This fixture is already joined to another Bluetooth mesh - the Sidus Link app, or a previous setup attempt that did not finish. amaran fixtures keep advertising as discoverable even when they are, so a factory reset is required before Home Assistant can adopt it.",
       "cannot_connect": "Could not connect to the fixture. Move it closer to a Bluetooth adapter and try again.",
       "no_devices_found": "No unprovisioned amaran fixtures found. Factory-reset the fixture so it advertises as unprovisioned, then retry.",
       "not_amaran": "This Bluetooth mesh device is not a recognised amaran fixture.",
