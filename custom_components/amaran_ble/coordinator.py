@@ -15,7 +15,10 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from .amaran import protocol
 from .amaran.products import Product
 from .const import (
+    CONF_CONFIGURED,
+    CONF_DEV_KEY,
     CONF_SEQUENCE,
+    CONF_VENDOR_MODELS,
     DOMAIN,
     PROVISIONER_ADDRESS,
     SEQUENCE_PERSIST_INTERVAL,
@@ -98,9 +101,54 @@ class AmaranCoordinator:
     async def async_start(self) -> None:
         """Bring the link up, tolerating a fixture that is currently away."""
         try:
-            await self._ensure_connected()
+            async with self._lock:
+                await self._ensure_connected()
+                await self._ensure_configured()
         except (MeshSessionError, TimeoutError, OSError) as err:
             _LOGGER.debug("initial connect to %s failed: %s", self.ble_address, err)
+
+    async def _ensure_configured(self) -> None:
+        """Add and bind the AppKey if the config flow could not finish that.
+
+        Provisioning is irreversible but configuration is not, so a fixture
+        can end up provisioned yet unconfigured. Retrying here means such a
+        fixture recovers on its own instead of needing a factory reset.
+        """
+        if self.entry.data.get(CONF_CONFIGURED) or self._session is None:
+            return
+
+        dev_key = bytes.fromhex(self.entry.data[CONF_DEV_KEY])
+        session = self._session
+        _LOGGER.debug("completing deferred configuration for 0x%04x", self.node_address)
+
+        composition = await session.get_composition_data(self.node_address, dev_key)
+        await session.add_app_key(self.node_address, dev_key)
+
+        vendor_models: list[list[int]] = []
+        for element in composition.elements:
+            for company_id, model_id in element.vendor_models:
+                await session.bind_model(
+                    self.node_address,
+                    dev_key,
+                    element.address,
+                    model_id,
+                    company_id=company_id,
+                )
+                vendor_models.append([company_id, model_id])
+
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={
+                **self.entry.data,
+                CONF_VENDOR_MODELS: vendor_models,
+                CONF_CONFIGURED: True,
+            },
+        )
+        _LOGGER.info(
+            "configuration complete for 0x%04x, bound %d vendor model(s)",
+            self.node_address,
+            len(vendor_models),
+        )
 
     async def async_stop(self) -> None:
         """Disconnect and persist the sequence number."""

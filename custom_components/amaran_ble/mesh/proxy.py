@@ -88,6 +88,13 @@ class MeshGattBearer:
     async def send(self, msg_type: int, payload: bytes) -> None:
         """Frame and write a payload, segmenting it if it exceeds the MTU."""
         pdus = proxy_segment(msg_type, payload, self.mtu)
+        _LOGGER.debug(
+            "GATT TX %s type=%d mtu=%d %s",
+            self._data_in[4:8],
+            msg_type,
+            self.mtu,
+            " ".join(p.hex() for p in pdus),
+        )
         async with self._write_lock:
             for pdu in pdus:
                 await self._client.write_gatt_char(self._data_in, pdu, response=False)
@@ -96,6 +103,7 @@ class MeshGattBearer:
         self, _characteristic: BleakGATTCharacteristic, data: bytearray
     ) -> None:
         """Feed a notification into the reassembler and dispatch when complete."""
+        _LOGGER.debug("GATT RX %s %s", self._data_out[4:8], bytes(data).hex())
         result = self._reassembler.push(bytes(data))
         if result is None:
             return

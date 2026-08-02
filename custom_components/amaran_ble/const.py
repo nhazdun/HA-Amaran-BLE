@@ -18,6 +18,10 @@ CONF_UNICAST_ADDRESS: Final = "unicast_address"
 CONF_ELEMENT_COUNT: Final = "element_count"
 CONF_SEQUENCE: Final = "sequence"
 CONF_VENDOR_MODELS: Final = "vendor_models"
+#: False until the AppKey has been added and bound to the node's vendor models.
+#: Provisioning is irreversible, configuration is retryable, so they are tracked
+#: separately - see the note in coordinator.async_ensure_configured.
+CONF_CONFIGURED: Final = "configured"
 
 # The provisioner (Home Assistant) always takes the first unicast address.
 PROVISIONER_ADDRESS: Final = 0x0001

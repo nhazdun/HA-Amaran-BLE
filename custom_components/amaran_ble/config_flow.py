@@ -17,6 +17,7 @@ from .amaran.products import Product, lookup
 from .const import (
     CONF_ADDRESS,
     CONF_APP_KEY,
+    CONF_CONFIGURED,
     CONF_DEV_KEY,
     CONF_DEVICE_NAME,
     CONF_ELEMENT_COUNT,
@@ -39,8 +40,8 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 25.0
 #: The node reboots after provisioning; wait and retry before giving up.
-CONFIGURE_ATTEMPTS = 3
-CONFIGURE_BACKOFF = 2.0
+CONFIGURE_ATTEMPTS = 4
+CONFIGURE_BACKOFF = 3.0
 
 
 def device_name_from_service_info(info: BluetoothServiceInfoBleak) -> str | None:
@@ -202,34 +203,25 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
         finally:
             await client.disconnect()
 
-        # The node drops the provisioning link and comes back advertising the
-        # Proxy service, so give it a moment and retry the reconnect.
+        # Provisioning is the irreversible half: the fixture now belongs to this
+        # mesh and will not answer another Invite. Persist the keys *before*
+        # attempting configuration, so a failure here leaves a recoverable entry
+        # instead of a fixture orphaned in a network nobody has the keys to.
         vendor_models: list[list[int]] = []
-        last_error: Exception | None = None
-        for attempt in range(CONFIGURE_ATTEMPTS):
-            await asyncio.sleep(CONFIGURE_BACKOFF * (attempt + 1))
-            try:
-                vendor_models = await self._async_configure_node(
-                    net_key,
-                    app_key,
-                    iv_index,
-                    result.unicast_address,
-                    result.device_key,
-                )
-            except (MeshSessionError, TimeoutError, OSError) as err:
-                last_error = err
-                _LOGGER.debug(
-                    "post-provision configuration attempt %d/%d failed: %s",
-                    attempt + 1,
-                    CONFIGURE_ATTEMPTS,
-                    err,
-                )
-            else:
-                break
-        else:
-            raise MeshSessionError(
-                f"provisioned, but configuration failed: {last_error}"
+        configured = False
+        try:
+            vendor_models = await self._async_configure_with_retries(
+                net_key, app_key, iv_index, result.unicast_address, result.device_key
             )
+        except (MeshSessionError, TimeoutError, OSError) as err:
+            _LOGGER.warning(
+                "provisioned 0x%04x, but configuration did not complete (%s); "
+                "the integration will retry on setup",
+                result.unicast_address,
+                err,
+            )
+        else:
+            configured = True
 
         return self.async_create_entry(
             title=f"{self._product.name} ({self._device_name.split('-')[-1]})",
@@ -244,9 +236,36 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_UNICAST_ADDRESS: result.unicast_address,
                 CONF_ELEMENT_COUNT: result.element_count,
                 CONF_VENDOR_MODELS: vendor_models,
+                CONF_CONFIGURED: configured,
                 CONF_SEQUENCE: 0,
             },
         )
+
+    async def _async_configure_with_retries(
+        self,
+        net_key: bytes,
+        app_key: bytes,
+        iv_index: int,
+        node_address: int,
+        device_key: bytes,
+    ) -> list[list[int]]:
+        """Configure the node, retrying while it finishes rebooting."""
+        last_error: Exception | None = None
+        for attempt in range(CONFIGURE_ATTEMPTS):
+            await asyncio.sleep(CONFIGURE_BACKOFF * (attempt + 1))
+            try:
+                return await self._async_configure_node(
+                    net_key, app_key, iv_index, node_address, device_key
+                )
+            except (MeshSessionError, TimeoutError, OSError) as err:
+                last_error = err
+                _LOGGER.debug(
+                    "post-provision configuration attempt %d/%d failed: %s",
+                    attempt + 1,
+                    CONFIGURE_ATTEMPTS,
+                    err,
+                )
+        raise MeshSessionError(str(last_error))
 
     async def _async_configure_node(
         self,
