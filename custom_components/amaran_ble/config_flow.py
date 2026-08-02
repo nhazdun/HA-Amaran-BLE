@@ -12,6 +12,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import AbortFlow
 
 from .amaran.products import Product, lookup
 from .const import (
@@ -47,6 +48,13 @@ CONNECT_TIMEOUT = 25.0
 #: The node reboots after provisioning; wait and retry before giving up.
 CONFIGURE_ATTEMPTS = 4
 CONFIGURE_BACKOFF = 3.0
+
+#: Addresses currently being provisioned. Home Assistant's per-unique-id flow
+#: guards do not cover this: provisioning is destructive and irreversible, so
+#: two flows reaching it for the same fixture would each hand it a different
+#: NetKey and leave the surviving config entry holding keys the fixture does
+#: not have. Guard the operation itself, not just flow creation.
+_PROVISIONING: set[str] = set()
 
 
 def device_name_from_service_info(info: BluetoothServiceInfoBleak) -> str | None:
@@ -109,7 +117,13 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
             discovery, name, product = self._discovered[address]
-            await self.async_set_unique_id(address, raise_on_progress=False)
+            # raise_on_progress must stay True here. The usual Bluetooth
+            # boilerplate disables it so a user flow can pre-empt a pending
+            # discovery, but provisioning is destructive and not idempotent:
+            # two flows racing would provision the fixture twice with different
+            # random keys, and whichever entry survives would hold the wrong
+            # ones.
+            await self.async_set_unique_id(address)
             self._abort_if_unique_id_configured()
             self._discovery = discovery
             self._device_name = name
@@ -182,34 +196,41 @@ class AmaranConfigFlow(ConfigFlow, domain=DOMAIN):
         assert self._product is not None
         assert self._device_name is not None
 
+        address = self._discovery.address
+        if address in _PROVISIONING:
+            raise AbortFlow("already_in_progress")
+
         net_key, app_key, iv_index = self._mesh_network()
         node_address = self._next_unicast_address()
 
         device = bluetooth.async_ble_device_from_address(
-            self.hass, self._discovery.address, connectable=True
+            self.hass, address, connectable=True
         )
         if device is None:
             raise MeshSessionError("fixture went out of range")
 
-        client = await establish_connection(
-            BleakClientWithServiceCache,
-            device,
-            f"{DOMAIN}-provision-{self._discovery.address}",
-            timeout=CONNECT_TIMEOUT,
-        )
-
+        _PROVISIONING.add(address)
         try:
-            provisioner = Provisioner(client)
-            result = await provisioner.provision(
-                ProvisioningData(
-                    net_key=net_key,
-                    net_key_index=0,
-                    iv_index=iv_index,
-                    unicast_address=node_address,
-                )
+            client = await establish_connection(
+                BleakClientWithServiceCache,
+                device,
+                f"{DOMAIN}-provision-{address}",
+                timeout=CONNECT_TIMEOUT,
             )
+            try:
+                provisioner = Provisioner(client)
+                result = await provisioner.provision(
+                    ProvisioningData(
+                        net_key=net_key,
+                        net_key_index=0,
+                        iv_index=iv_index,
+                        unicast_address=node_address,
+                    )
+                )
+            finally:
+                await client.disconnect()
         finally:
-            await client.disconnect()
+            _PROVISIONING.discard(address)
 
         # Provisioning is the irreversible half: the fixture now belongs to this
         # mesh and will not answer another Invite. Persist the keys *before*
