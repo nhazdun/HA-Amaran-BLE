@@ -33,6 +33,13 @@ FIRST_NODE_ADDRESS: Final = 0x0002
 SEQUENCE_BLOCK: Final = 2000
 #: Reserve the next block once this many numbers of the current one remain.
 SEQUENCE_HEADROOM: Final = 200
+#: Set once the entry's stored sequence is a reserved ceiling rather than a
+#: lazily-persisted counter.
+CONF_SEQUENCE_RESERVED: Final = "sequence_reserved"
+#: One-time jump applied when migrating an entry off the old scheme. The node
+#: may already have retired numbers the old counter never recorded, and the
+#: sequence space is 24 bits, so skipping a chunk costs nothing.
+SEQUENCE_RECOVERY_JUMP: Final = 100_000
 
 # Mesh Provisioning Service, advertised by unprovisioned fixtures.
 MESH_PROVISIONING_UUID: Final = "00001827-0000-1000-8000-00805f9b34fb"

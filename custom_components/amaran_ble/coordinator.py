@@ -29,8 +29,10 @@ from .const import (
     CONF_VENDOR_MODELS,
     DOMAIN,
     PROVISIONER_ADDRESS,
+    CONF_SEQUENCE_RESERVED,
     SEQUENCE_BLOCK,
     SEQUENCE_HEADROOM,
+    SEQUENCE_RECOVERY_JUMP,
 )
 from .mesh.session import MeshCredentials, MeshSession, MeshSessionError
 
@@ -406,11 +408,22 @@ class AmaranCoordinator:
         ceiling we may use, written before the first message goes out, so even
         an unclean shutdown can only ever waste numbers, never repeat them.
         """
-        start = self.entry.data.get(CONF_SEQUENCE, 0) + 1
+        stored = self.entry.data.get(CONF_SEQUENCE, 0)
+        if not self.entry.data.get(CONF_SEQUENCE_RESERVED):
+            # Migrating off the old lazily-persisted counter: the node may have
+            # retired numbers above the stored value, so skip clear of them.
+            stored += SEQUENCE_RECOVERY_JUMP
+            _LOGGER.debug("migrating sequence counter, skipping to %d", stored)
+
+        start = stored + 1
         self._sequence_ceiling = start + SEQUENCE_BLOCK
         self.hass.config_entries.async_update_entry(
             self.entry,
-            data={**self.entry.data, CONF_SEQUENCE: self._sequence_ceiling},
+            data={
+                **self.entry.data,
+                CONF_SEQUENCE: self._sequence_ceiling,
+                CONF_SEQUENCE_RESERVED: True,
+            },
         )
         _LOGGER.debug("reserved sequence numbers %d-%d", start, self._sequence_ceiling)
         return start
