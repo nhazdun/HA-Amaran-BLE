@@ -258,7 +258,7 @@ class AmaranCoordinator:
         else:
             return
 
-        self._notify()
+        self.notify()
 
     async def async_refresh_power(self) -> None:
         """Ask the fixture for a battery/power report.
@@ -328,7 +328,8 @@ class AmaranCoordinator:
     def _set_available(self, available: bool) -> None:
         if self.state.available != available:
             self.state.available = available
-            self._notify()
+            self.notify()
 
-    def _notify(self) -> None:
+    def notify(self) -> None:
+        """Tell every entity of this fixture to re-read the tracked state."""
         async_dispatcher_send(self.hass, self.signal_update)

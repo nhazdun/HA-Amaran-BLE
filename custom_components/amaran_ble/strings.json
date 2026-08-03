@@ -41,6 +41,9 @@
       },
       "refresh_power": {
         "name": "Refresh power"
+      },
+      "stop_effect": {
+        "name": "Stop effect"
       }
     }
   }
