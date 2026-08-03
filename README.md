@@ -20,6 +20,7 @@ from the Sidus Link Android app (`com.sidus.link.amaran`).
 | `light` | On/off, brightness (0.1 % steps), 2700–6500 K, and 7 effects |
 | `number` — Effect speed | The 4-bit frequency field, applied live to the running effect |
 | `select` — Dimming curve | Linear, exponential, logarithmic or S-curve |
+| `button` — Stop effect | Drops back out of effect mode to plain CCT |
 | `button` — Identify | Runs the fixture's own "I am here" effect |
 | `sensor` — battery, voltages, runtime | Only created for fixtures that actually report power |
 
