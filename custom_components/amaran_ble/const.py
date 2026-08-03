@@ -27,11 +27,12 @@ CONF_CONFIGURED: Final = "configured"
 PROVISIONER_ADDRESS: Final = 0x0001
 FIRST_NODE_ADDRESS: Final = 0x0002
 
-#: Sequence numbers are persisted lazily; on load we skip ahead by this much so
-#: an unclean shutdown can never replay a number the node has already seen.
-SEQUENCE_RESTART_MARGIN: Final = 1000
-#: Persist the sequence number every N messages.
-SEQUENCE_PERSIST_INTERVAL: Final = 64
+#: Sequence numbers are reserved in blocks *before* use, never persisted after
+#: the fact: a mesh node drops anything at or below the highest number it has
+#: already seen from us, so a repeat is silently fatal while a gap is harmless.
+SEQUENCE_BLOCK: Final = 2000
+#: Reserve the next block once this many numbers of the current one remain.
+SEQUENCE_HEADROOM: Final = 200
 
 # Mesh Provisioning Service, advertised by unprovisioned fixtures.
 MESH_PROVISIONING_UUID: Final = "00001827-0000-1000-8000-00805f9b34fb"

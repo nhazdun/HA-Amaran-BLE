@@ -29,8 +29,8 @@ from .const import (
     CONF_VENDOR_MODELS,
     DOMAIN,
     PROVISIONER_ADDRESS,
-    SEQUENCE_PERSIST_INTERVAL,
-    SEQUENCE_RESTART_MARGIN,
+    SEQUENCE_BLOCK,
+    SEQUENCE_HEADROOM,
 )
 from .mesh.session import MeshCredentials, MeshSession, MeshSessionError
 
@@ -91,7 +91,7 @@ class AmaranCoordinator:
         self._session: MeshSession | None = None
         self._client: BleakClientWithServiceCache | None = None
         self._lock = asyncio.Lock()
-        self._persist_countdown = SEQUENCE_PERSIST_INTERVAL
+        self._sequence_ceiling = 0
         self._closing = False
         self._reconnecting = False
         self._unsubscribe: list[Callable[[], None]] = []
@@ -202,13 +202,12 @@ class AmaranCoordinator:
         )
 
     async def async_stop(self) -> None:
-        """Disconnect and persist the sequence number."""
+        """Disconnect and stop reconnect handling."""
         self._closing = True
         while self._unsubscribe:
             self._unsubscribe.pop()()
         async with self._lock:
             await self._teardown()
-        self._persist_sequence(force=True)
 
     async def _ensure_connected(self) -> MeshSession:
         if self._session is not None and self._client and self._client.is_connected:
@@ -233,7 +232,7 @@ class AmaranCoordinator:
         session = MeshSession(
             self._client,
             self.credentials,
-            sequence=self.entry.data.get(CONF_SEQUENCE, 0) + SEQUENCE_RESTART_MARGIN,
+            sequence=self._reserve_sequence(),
             on_message=self._on_mesh_message,
         )
         await session.start()
@@ -393,25 +392,38 @@ class AmaranCoordinator:
             f"could not reach {self.ble_address}: {last_error}"
         ) from last_error
 
-    def _track_sequence(self, session: MeshSession) -> None:
-        """Persist the sequence number occasionally so restarts stay valid."""
-        self._persist_countdown -= 1
-        if self._persist_countdown <= 0:
-            self._persist_countdown = SEQUENCE_PERSIST_INTERVAL
-            self._persist_sequence(session=session)
+    def _reserve_sequence(self) -> int:
+        """Claim a block of sequence numbers and return the first of them.
 
-    def _persist_sequence(
-        self, *, session: MeshSession | None = None, force: bool = False
-    ) -> None:
-        session = session or self._session
-        if session is None:
-            return
-        current = session.sequence
-        if not force and self.entry.data.get(CONF_SEQUENCE, 0) >= current:
-            return
+        A mesh node remembers the highest sequence number it has seen from us
+        and silently drops anything at or below it. Persisting the counter
+        periodically is not enough: a session that sends fewer messages than
+        the persist interval stores nothing, so the next session restarts on
+        numbers the node has already seen and every command is discarded with
+        no error anywhere.
+
+        Reserving up front makes that impossible - the stored value is the
+        ceiling we may use, written before the first message goes out, so even
+        an unclean shutdown can only ever waste numbers, never repeat them.
+        """
+        start = self.entry.data.get(CONF_SEQUENCE, 0) + 1
+        self._sequence_ceiling = start + SEQUENCE_BLOCK
         self.hass.config_entries.async_update_entry(
-            self.entry, data={**self.entry.data, CONF_SEQUENCE: current}
+            self.entry,
+            data={**self.entry.data, CONF_SEQUENCE: self._sequence_ceiling},
         )
+        _LOGGER.debug("reserved sequence numbers %d-%d", start, self._sequence_ceiling)
+        return start
+
+    def _track_sequence(self, session: MeshSession) -> None:
+        """Reserve another block before the current one runs out."""
+        if session.sequence >= self._sequence_ceiling - SEQUENCE_HEADROOM:
+            self._sequence_ceiling = session.sequence + SEQUENCE_BLOCK
+            self.hass.config_entries.async_update_entry(
+                self.entry,
+                data={**self.entry.data, CONF_SEQUENCE: self._sequence_ceiling},
+            )
+            _LOGGER.debug("extended sequence reservation to %d", self._sequence_ceiling)
 
     def _set_available(self, available: bool) -> None:
         if self.state.available != available:
