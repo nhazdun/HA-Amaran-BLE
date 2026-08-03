@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from homeassistant.components import bluetooth
+from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothChange,
+    BluetoothServiceInfoBleak,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 
 from .amaran import protocol
 from .amaran.products import Product
@@ -33,6 +41,8 @@ COMMAND_RETRIES = 2
 #: How long to wait for a power report before concluding the model sends none.
 POWER_PROBE_TICKS = 10
 POWER_PROBE_INTERVAL = 0.3
+#: Backstop reconnect poll, for when the fixture stops advertising entirely.
+RECONNECT_INTERVAL = timedelta(seconds=60)
 
 
 @dataclass(slots=True)
@@ -83,6 +93,8 @@ class AmaranCoordinator:
         self._lock = asyncio.Lock()
         self._persist_countdown = SEQUENCE_PERSIST_INTERVAL
         self._closing = False
+        self._reconnecting = False
+        self._unsubscribe: list[Callable[[], None]] = []
 
     @property
     def signal_update(self) -> str:
@@ -106,13 +118,28 @@ class AmaranCoordinator:
     # -- connection --------------------------------------------------------
 
     async def async_start(self) -> None:
-        """Bring the link up, tolerating a fixture that is currently away."""
+        """Bring the link up and keep it up."""
+        self._unsubscribe.append(
+            bluetooth.async_register_callback(
+                self.hass,
+                self._on_advertisement,
+                BluetoothCallbackMatcher(address=self.ble_address, connectable=True),
+                bluetooth.BluetoothScanningMode.ACTIVE,
+            )
+        )
+        self._unsubscribe.append(
+            async_track_time_interval(
+                self.hass, self._reconnect_tick, RECONNECT_INTERVAL
+            )
+        )
+
         try:
             async with self._lock:
                 await self._ensure_connected()
                 await self._ensure_configured()
         except (MeshSessionError, TimeoutError, OSError) as err:
             _LOGGER.debug("initial connect to %s failed: %s", self.ble_address, err)
+            self._refresh_availability()
             return
 
         await self._probe_power()
@@ -177,6 +204,8 @@ class AmaranCoordinator:
     async def async_stop(self) -> None:
         """Disconnect and persist the sequence number."""
         self._closing = True
+        while self._unsubscribe:
+            self._unsubscribe.pop()()
         async with self._lock:
             await self._teardown()
         self._persist_sequence(force=True)
@@ -230,11 +259,70 @@ class AmaranCoordinator:
 
     @callback
     def _on_disconnect(self, _client: BleakClientWithServiceCache) -> None:
-        """Handle an unexpected link drop."""
+        """Handle a link drop and line up a reconnect.
+
+        Fixtures and Bluetooth proxies both drop idle links, so a disconnect
+        is routine rather than an error. Availability follows whether the
+        fixture is in range, not whether we happen to be holding a GATT link -
+        otherwise the entity greys out and the user cannot even issue the
+        command that would reconnect it.
+        """
         self._session = None
-        if not self._closing:
-            _LOGGER.debug("%s disconnected", self.ble_address)
-            self._set_available(False)
+        if self._closing:
+            return
+        _LOGGER.debug("%s disconnected", self.ble_address)
+        self._refresh_availability()
+        self._schedule_reconnect()
+
+    @callback
+    def _on_advertisement(
+        self, service_info: BluetoothServiceInfoBleak, change: BluetoothChange
+    ) -> None:
+        """Reconnect on hearing the fixture advertise, since it is reachable."""
+        self._refresh_availability()
+        if self._session is None:
+            self._schedule_reconnect()
+
+    @callback
+    def _refresh_availability(self) -> None:
+        """Available means in range, whether or not a link is currently up."""
+        present = bluetooth.async_address_present(
+            self.hass, self.ble_address, connectable=True
+        )
+        self._set_available(present or self._session is not None)
+
+    @callback
+    def _schedule_reconnect(self) -> None:
+        """Reconnect in the background, at most one attempt at a time."""
+        if self._closing or self._reconnecting:
+            return
+        self._reconnecting = True
+        self.hass.async_create_background_task(
+            self._async_reconnect(), f"{DOMAIN} reconnect {self.ble_address}"
+        )
+
+    async def _async_reconnect(self) -> None:
+        try:
+            async with self._lock:
+                if self._closing or self._session is not None:
+                    return
+                await self._ensure_connected()
+                await self._ensure_configured()
+        except (MeshSessionError, TimeoutError, OSError) as err:
+            _LOGGER.debug("reconnect to %s failed: %s", self.ble_address, err)
+        except Exception as err:  # noqa: BLE001 - a background task must not die
+            _LOGGER.debug("reconnect to %s errored: %s", self.ble_address, err)
+        finally:
+            self._reconnecting = False
+            self._refresh_availability()
+
+    @callback
+    def _reconnect_tick(self, _now: datetime) -> None:
+        """Periodic backstop for when no advertisement arrives."""
+        if self._session is None:
+            self._schedule_reconnect()
+        else:
+            self._refresh_availability()
 
     @callback
     def _on_mesh_message(self, src: int, opcode: int, params: bytes) -> None:
